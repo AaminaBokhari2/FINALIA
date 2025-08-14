@@ -113,10 +113,9 @@ export const apiService = {
 
   // Generate presentation
   async generatePresentation(data: {
-    topic: string;
-    audience: string;
-    duration: number;
-    theme: string;
+    session_id?: string;
+    topic?: string;
+    max_slides: number;
   }): Promise<any> {
     const response = await api.post('/generate-presentation', data);
     return response.data;
