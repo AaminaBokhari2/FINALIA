@@ -3,12 +3,15 @@
 FastAPI Backend for AI Study Assistant - GROQ VERSION
 This version uses Groq API instead of OpenAI
 """
-
+from fastapi.staticfiles import StaticFiles
+import os
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import tempfile
 import os
+from pathlib import Path  # Added this import
+import pickle  # Added this import
 from typing import List, Dict, Optional
 from fastapi.responses import FileResponse
 import json
@@ -25,7 +28,7 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import your existing classes and newly integrated slidesmaker classes
+# Import pipeline modules
 try:
     from pipeline import (
         GroqClient,
@@ -36,9 +39,8 @@ try:
         AIEnhancedResearchDiscoveryAgent,
         AIEnhancedYouTubeDiscoveryAgent,
         AIEnhancedWebResourceAgent,
-        QAChatbotAgent,PresentationAgent 
-        
-        
+        QAChatbotAgent,
+        PresentationAgent
     )
     logger.info("✅ Successfully imported pipeline modules")
 except ImportError as e:
@@ -52,28 +54,31 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add static files mount for persistent storage
+os.makedirs("static/uploads", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://psychic-yodel-77vv4g95qg6crv9g-5173.app.github.dev",  # Your frontend
-        "https://psychic-yodel-77vv4g95qg6crv9g-5173.app.github.dev/", # With trailing slash
-        "https://*.app.github.dev",  # Wildcard for all codespaces
+        "https://psychic-yodel-77vv4g95qg6crv9g-5173.app.github.dev",
+        "https://*.app.github.dev",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic models for API responses
+# Pydantic models (unchanged from original)
 class ProcessingStatus(BaseModel):
-  status: str
-  message: str
-  word_count: int
-  page_count: int
-  methods_used: List[str]
+    status: str
+    message: str
+    word_count: int
+    page_count: int
+    methods_used: List[str]
 
 class SummaryResponse(BaseModel):
   summary: str
@@ -140,16 +145,28 @@ class ApiStatusResponse(BaseModel):
 
 
 
-# Global variables to store state
-study_sessions = {}
+# Session persistence setup
+SESSION_FILE = Path("sessions.pkl")
+
+if SESSION_FILE.exists():
+    with open(SESSION_FILE, "rb") as f:
+        study_sessions = pickle.load(f)
+else:
+    study_sessions = {}
+
+def save_sessions():
+    with open(SESSION_FILE, "wb") as f:
+        pickle.dump(study_sessions, f)
+
+# Global variables
 api_status = {
-  "available": False,
-  "quota_exceeded": False,
-  "last_check": 0,
-  "consecutive_failures": 0
+    "available": False,
+    "quota_exceeded": False,
+    "last_check": 0,
+    "consecutive_failures": 0
 }
 
-# Initialize agents with error handling
+# Initialize agents
 client = None
 pdf_processor = None
 summary_agent = None
@@ -158,8 +175,8 @@ quiz_agent = None
 research_agent = None
 youtube_agent = None
 web_agent = None
-presentation_agent = None 
-coordinator_agent = None
+presentation_agent = None
+
 
 def check_api_status():
   """Check Groq API status and update global status"""
@@ -345,25 +362,13 @@ def generate_fallback_quiz(text: str, num_questions: int = 8) -> List[Dict]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize agents on startup with better error handling"""
-    global client, pdf_processor, summary_agent, flashcard_agent, quiz_agent, research_agent, youtube_agent, web_agent, coordinator_agent, presentation_agent
+    """Initialize agents on startup"""
+    global client, pdf_processor, summary_agent, flashcard_agent, quiz_agent, research_agent, youtube_agent, web_agent, presentation_agent
     
     try:
         logger.info("🚀 Initializing AI agents...")
-        
-        # Initialize GroqClient first
         client = GroqClient()
-        logger.info("✅ GroqClient initialized")
-        
-        # Initialize PDF processor (always available)
         pdf_processor = EnhancedPDFProcessor()
-        logger.info("✅ PDF processor initialized")
-        
-       
-        
-        
-        
-        # Initialize other agents...
         summary_agent = SummaryAgent(client)
         flashcard_agent = FlashcardAgent(client)
         quiz_agent = QuizAgent(client)
@@ -371,36 +376,24 @@ async def startup_event():
         youtube_agent = AIEnhancedYouTubeDiscoveryAgent(client)
         web_agent = AIEnhancedWebResourceAgent(client)
         presentation_agent = PresentationAgent()
-        logger.info("✅ Presentation agent initialized")
-        
         logger.info("✅ All AI agents initialized")
         
-        # Check API status
         if check_api_status():
             logger.info("✅ Groq API connection successful")
-        else:
-            logger.warning("⚠️ Groq API issues detected - fallback mode enabled")
-            
     except Exception as e:
         logger.error(f"❌ Error initializing AI agents: {e}")
-        logger.info("🔄 Running in fallback mode - basic functionality only")
-
 
 @app.post("/generate-presentation", response_model=PresentationResponse)
 async def generate_presentation(
     request: PresentationRequest,
     session_id: str = "default"
 ):
-    """Generate a presentation from an uploaded PDF using the updated PresentationAgent"""
-    
+    """Generate presentation from uploaded PDF"""
     if session_id not in study_sessions or "pdf_path" not in study_sessions[session_id]:
-        raise HTTPException(status_code=404, detail="No PDF found for this session. Please upload a PDF first.")
+        raise HTTPException(404, detail="No PDF found for this session. Please upload a PDF first.")
     
     try:
-        logger.info("📊 Starting presentation generation from PDF...")
         pdf_path = study_sessions[session_id]["pdf_path"]
-        
-        # Run the local Hugging Face model in a thread
         result = await asyncio.to_thread(
             presentation_agent.generate_presentation_from_pdf,
             pdf_path=pdf_path,
@@ -409,107 +402,59 @@ async def generate_presentation(
         )
         
         if result.get("status") != "success":
-            logger.error(f"❌ Presentation generation failed: {result.get('message')}")
             return PresentationResponse(
                 status="error",
                 message=result.get("message", "Unknown error"),
                 fallback_used=True
             )
-
-        logger.info(f"✅ Presentation generated with {result.get('slide_count', 0)} slides")
+            
         return PresentationResponse(**result)
-    
     except Exception as e:
-        logger.error(f"❌ Presentation generation error: {str(e)}")
+        logger.error(f"Presentation generation error: {str(e)}")
         return PresentationResponse(
             status="error",
-            message=f"Presentation generation failed: {str(e)}",
+            message=str(e),
             fallback_used=True
         )
 
 @app.post("/upload-pdf", response_model=ProcessingStatus)
-async def upload_pdf(file: UploadFile = File(...)):
-  """Upload and process PDF file - This works without AI"""
-  
-  if not file.filename:
-      raise HTTPException(status_code=400, detail="No filename provided")
-  
-  if not file.filename.lower().endswith('.pdf'):
-      raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-  
-  # Check file size (limit to 50MB)
-  content = await file.read()
-  file_size = len(content)
-  
-  if file_size > 50 * 1024 * 1024:  # 50MB limit
-      raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB")
-  
-  if file_size == 0:
-      raise HTTPException(status_code=400, detail="Empty file uploaded")
-  
-  temp_file_path = None
-  
-  try:
-      logger.info(f"📄 Processing PDF: {file.filename} ({file_size/1024/1024:.2f}MB)")
-      
-      # Create temporary file
-      with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-          temp_file.write(content)
-          temp_file_path = temp_file.name
-      
-      # Process PDF with timeout handling
-      try:
-          result = await asyncio.wait_for(
-              asyncio.to_thread(pdf_processor.extract_text_with_ocr, temp_file_path),
-              timeout=120.0  # 2 minutes timeout
-          )
-      except asyncio.TimeoutError:
-          logger.error("❌ PDF processing timeout")
-          raise HTTPException(status_code=408, detail="PDF processing timeout. File may be too complex or large.")
-      
-      if result["status"] == "error":
-          logger.error(f"❌ PDF processing failed: {result['message']}")
-          raise HTTPException(status_code=400, detail=result["message"])
-      
-      if result["word_count"] < 10:
-          logger.warning("⚠️ Very little text extracted from PDF")
-          raise HTTPException(
-              status_code=422, 
-              detail="Very little text could be extracted. PDF may be image-based, protected, or corrupted."
-          )
-      
-      # Store session data
-      session_id = "default"
-      study_sessions[session_id] = {
-          "text": result["text"],
-          "file_info": f"File: {file.filename} ({file_size/1024/1024:.2f} MB)",
-          "processing_result": result,
-          "filename": file.filename
-      }
-      
-      logger.info(f"✅ PDF processed successfully: {result['word_count']} words extracted")
-      
-      return ProcessingStatus(
-          status=result["status"],
-          message=result["message"],
-          word_count=result["word_count"],
-          page_count=result["page_count"],
-          methods_used=result["methods_used"]
-      )
-  
-  except HTTPException:
-      raise
-  except Exception as e:
-      logger.error(f"❌ Unexpected error processing PDF: {str(e)}")
-      raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
-  
-  finally:
-      # Clean up temp file
-      if temp_file_path and os.path.exists(temp_file_path):
-          try:
-              os.unlink(temp_file_path)
-          except Exception as e:
-              logger.warning(f"⚠️ Failed to cleanup temp file: {e}")
+async def upload_pdf(file: UploadFile = File(...), session_id: str = "default"):
+    """Upload and process PDF file with persistent storage"""
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(400, detail="Only PDF files are allowed")
+    
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:  # 50MB limit
+        raise HTTPException(400, detail="File too large (max 50MB)")
+    
+    try:
+        # Save file permanently
+        file_path = f"static/uploads/{file.filename}"
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        # Process PDF
+        result = await asyncio.to_thread(
+            pdf_processor.extract_text_with_ocr, 
+            file_path
+        )
+        
+        if result["word_count"] < 10:
+            raise HTTPException(422, detail="Very little text could be extracted")
+        
+        # Store session
+        study_sessions[session_id] = {
+            "text": result["text"],
+            "pdf_path": file_path,
+            "filename": file.filename,
+            "processing_result": result
+        }
+        save_sessions()
+        
+        return ProcessingStatus(**result)
+    except Exception as e:
+        logger.error(f"PDF processing error: {str(e)}")
+        raise HTTPException(500, detail=str(e))
 
 @app.post("/generate-summary", response_model=SummaryResponse)
 async def generate_summary(session_id: str = "default"):
@@ -1000,14 +945,19 @@ def generate_fallback_answer(question: str, document_text: str) -> str:
 
 @app.delete("/clear-session")
 async def clear_session(session_id: str = "default"):
-  """Clear session data"""
-  
-  if session_id in study_sessions:
-      del study_sessions[session_id]
-      logger.info(f"🗑️ Cleared session: {session_id}")
-      return {"message": "Session cleared successfully", "status": "success"}
-  else:
-      return {"message": "No active session found", "status": "info"}
+    """Clear session data"""
+    if session_id in study_sessions:
+        # Remove the PDF file if it exists
+        if "pdf_path" in study_sessions[session_id]:
+            try:
+                os.remove(study_sessions[session_id]["pdf_path"])
+            except Exception as e:
+                logger.warning(f"Could not remove PDF file: {e}")
+        
+        del study_sessions[session_id]
+        save_sessions()
+        return {"message": "Session cleared successfully"}
+    return {"message": "No active session found"}
 
 @app.get("/session-info")
 async def get_session_info(session_id: str = "default"):
