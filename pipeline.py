@@ -333,82 +333,255 @@ from pptx.util import Pt
 from pptx.dml.color import RGBColor
 import os
 
+
+#!/usr/bin/env python3
+import os
+import re
+import json
+import logging
+from typing import Dict, List, Optional
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.oxml.xmlchemy import OxmlElement
+from pptx.enum.shapes import MSO_SHAPE
+
+# Assuming these are defined in pipeline.py
+from pipeline import EnhancedPDFProcessor, GroqClient, safe_json_parse
+
+# Configure logging (consistent with fastapi_backend.py)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 class PresentationAgent:
     def __init__(self):
-        print("📊 Initializing local Hugging Face model (offline mode)...")
-        self.generator = pipeline("text-generation", model="google/flan-t5-large")
+        logger.info("📊 Initializing Presentation Agent...")
         self.pdf_processor = EnhancedPDFProcessor()
+        self.groq_client = GroqClient()
 
-    def generate_presentation_from_pdf(self, pdf_path: str, topic: str = None, max_slides: int = 7):
-        # Step 1: Extract text from PDF
-        pdf_result = self.pdf_processor.extract_text_with_ocr(pdf_path)
-        if pdf_result["status"] != "success":
-            return {"status": "error", "message": pdf_result["message"], "slides": []}
+    def generate_presentation_from_pdf(self, pdf_path: str, topic: Optional[str] = None, max_slides: int = 10) -> Dict:
+        """Generate AI-powered presentation with concise bullets and professional styling."""
+        try:
+            # Ensure output directory exists
+            os.makedirs("static/uploads", exist_ok=True)
 
-        document_text = pdf_result["text"]
+            # Extract and clean text
+            pdf_result = self.pdf_processor.extract_text_with_ocr(pdf_path)
+            if pdf_result["status"] != "success":
+                logger.error(f"PDF processing failed: {pdf_result['message']}")
+                return {"status": "error", "message": pdf_result["message"], "fallback_used": True}
 
-        # Step 2: Create outline with Hugging Face model
-        prompt = f"""
-        Create a {max_slides}-slide presentation outline on the topic '{topic or "Document"}'
-        based on the following text:
-        {document_text[:5000]}
-        Each slide should have:
-        - A title
-        - 3 to 4 bullet points
-        """
-        outline = self.generator(prompt, max_length=700)[0]["generated_text"]
+            clean_text = self._clean_extracted_text(pdf_result["text"])
+            if not clean_text.strip():
+                logger.error("No usable text extracted from PDF")
+                return {"status": "error", "message": "No usable text extracted from PDF", "fallback_used": True}
 
-        # Step 3: Parse slides
-        slides_data = self._parse_slides(outline)
+            # Truncate text for LLM
+            max_chars = 8000
+            if len(clean_text) > max_chars:
+                clean_text = clean_text[:max_chars] + "... (truncated)"
+                logger.info(f"Text truncated to {max_chars} characters")
 
-        # Step 4: Create styled PPTX
-        ppt_path = self._create_styled_ppt(topic or "Presentation", slides_data)
+            # Generate slide outline
+            slide_data = self._generate_slide_outline(clean_text, topic, max_slides)
+            if not slide_data:
+                logger.error("Failed to generate slide outline")
+                return {"status": "error", "message": "Failed to generate slide outline", "fallback_used": True}
 
-        return {
-            "status": "success",
-            "message": "Presentation created successfully from PDF",
-            "presentation_url": ppt_path,
-            "slides": slides_data,
-            "slide_count": len(slides_data)
-        }
+            # Create PPTX with professional theme
+            prs = Presentation()
+            # Apply a clean, modern theme
+            self._apply_theme(prs)
 
-    def _parse_slides(self, outline: str):
-        slides = []
-        current_slide = {"title": "", "content": []}
-        for line in outline.split("\n"):
-            line = line.strip("-• ").strip()
-            if not line:
-                continue
-            if line.lower().startswith("slide"):
-                if current_slide["title"]:
-                    slides.append(current_slide)
-                current_slide = {"title": line, "content": []}
-            elif not current_slide["title"]:
-                current_slide["title"] = line
-            else:
-                current_slide["content"].append(line)
-        if current_slide["title"]:
-            slides.append(current_slide)
+            base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+            pptx_path = f"static/uploads/{base_name}_presentation.pptx"
+
+            # Title Slide
+            title_slide = prs.slides.add_slide(prs.slide_layouts[0])
+            title = title_slide.shapes.title
+            subtitle = title_slide.placeholders[1]
+            title.text = slide_data[0]["title"]
+            subtitle.text = f"Generated from: {base_name} | AI-Powered by Groq"
+            self._format_text(title.text_frame, size=32, bold=True, color=RGBColor(31, 73, 125))  # Navy Blue
+            self._format_text(subtitle.text_frame, size=20, color=RGBColor(100, 100, 100))  # Gray
+
+            # Content Slides
+            for slide_info in slide_data[1:]:
+                slide = prs.slides.add_slide(prs.slide_layouts[1])
+                title_shape = slide.shapes.title
+                content_shape = slide.placeholders[1]
+
+                title_shape.text = slide_info["title"]
+                content_shape.text = "\n".join([f"- {point}" for point in slide_info["bullets"]])
+
+                # Format title and content
+                self._format_text(title_shape.text_frame, size=32, bold=True, color=RGBColor(31, 73, 125))
+                self._format_text(content_shape.text_frame, size=20, color=RGBColor(0, 0, 0))
+
+                # Add styled visual placeholder
+                if "visual" in slide_info and slide_info["visual"]:
+                    left, top, width, height = Inches(6.5), Inches(1.5), Inches(3.5), Inches(1.2)
+                    shape = slide.shapes.add_shape(
+                        MSO_SHAPE.RECTANGLE, left, top, width, height
+                    )
+                    shape.fill.solid()
+                    shape.fill.fore_color.rgb = RGBColor(0, 128, 128)  # Teal
+                    shape.line.color.rgb = RGBColor(31, 73, 125)  # Navy outline
+                    txBox = shape.text_frame
+                    txBox.text = f"Visual: {slide_info['visual']}"
+                    self._format_text(txBox, size=12, italic=True, color=RGBColor(255, 255, 255))
+
+            prs.save(pptx_path)
+            logger.info(f"Presentation saved to {pptx_path}")
+
+            return {
+                "status": "success",
+                "message": "AI-generated presentation created successfully",
+                "presentation_url": pptx_path,
+                "slides": slide_data,
+                "slide_count": len(prs.slides),
+                "api_used": True,
+                "fallback_used": False,
+                "title": slide_data[0]["title"]
+            }
+
+        except Exception as e:
+            logger.error(f"Presentation generation error: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Presentation generation failed: {str(e)}",
+                "fallback_used": True
+            }
+
+    def _apply_theme(self, prs: Presentation):
+        """Apply a professional theme with modern colors."""
+        for slide_master in prs.slide_master.slide_layouts:
+            background = slide_master.background
+            background.fill.solid()
+            background.fill.fore_color.rgb = RGBColor(211, 211, 211)  # Light Gray
+
+    def _format_text(self, text_frame, size: int, bold: bool = False, italic: bool = False, color: RGBColor = None):
+        """Apply consistent text formatting to text_frame."""
+        for paragraph in text_frame.paragraphs:
+            run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
+            run.font.name = "Calibri Light" if size > 20 else "Calibri"
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.italic = italic
+            if color:
+                run.font.color.rgb = color
+
+    def _clean_extracted_text(self, text: str) -> str:
+        """Clean raw extracted text."""
+        text = re.sub(r'--- Page \d+ ---', '', text)
+        text = re.sub(r'\n\s*\n', '\n', text)
+        return text.strip()
+
+    def _generate_slide_outline(self, text: str, topic: Optional[str], max_slides: int) -> List[Dict]:
+        """Use Groq LLM to generate concise slide data with explanations."""
+        if not text.strip():
+            logger.warning("Empty text provided for slide outline")
+            return []
+
+        effective_topic = topic or "Key Document Insights"
+
+        prompt = f"""Analyze this document text and create a professional {max_slides}-slide presentation outline on '{effective_topic}'.
+
+Document Content:
+{text}
+
+Return ONLY a valid JSON array of slide objects:
+[
+  {{
+    "title": "Slide Title",
+    "bullets": ["Key point: Brief explanation (20-30 words).", "..."],
+    "visual": "Optional visual suggestion (e.g., 'Process diagram', 'Trend chart', '')"
+  }},
+  ...
+]
+
+Guidelines:
+- Slide 1: Title slide with topic and 2-3 overview bullets.
+- Remaining slides: Cover introduction, key concepts, examples, challenges, or conclusions.
+- 3-4 bullets per slide: Concise, fact-based, each with a 20-30 word explanation.
+- Use document content for specific examples; avoid generic filler.
+- Vary slide types (e.g., definitions, comparisons, takeaways).
+- Suggest visuals only for relevant slides (e.g., charts for data, diagrams for processes).
+- Ensure JSON is valid and parseable."""
+
+        try:
+            response = self.groq_client.chat_completion(
+                [{"role": "user", "content": prompt}],
+                max_tokens=2500
+            )
+
+            if response.startswith("❌"):
+                logger.warning(f"AI outline generation failed: {response}")
+                return self._fallback_slide_outline(text, max_slides)
+
+            slides = safe_json_parse(response)
+            if isinstance(slides, list) and len(slides) > 0:
+                logger.info(f"Generated {len(slides)} slides via AI")
+                return slides[:max_slides]
+
+            logger.warning("Invalid or empty JSON response, using fallback")
+            return self._fallback_slide_outline(text, max_slides)
+
+        except Exception as e:
+            logger.error(f"Outline generation error: {str(e)}")
+            return self._fallback_slide_outline(text, max_slides)
+
+    def _fallback_slide_outline(self, text: str, max_slides: int) -> List[Dict]:
+        """Generate concise fallback outline without AI."""
+        if not text.strip():
+            logger.warning("Empty text in fallback mode")
+            return []
+
+        sentences = [s.strip() for s in re.split(r'\.|\n', text) if len(s.strip()) > 20]
+        word_count = len(text.split())
+
+        # Extract keywords for relevance
+        words = text.split()
+        common_words = {"the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are"}
+        word_freq = {}
+        for word in words:
+            clean_word = word.lower().strip('.,!?;:"()[]{}')
+            if len(clean_word) > 3 and clean_word not in common_words and clean_word.isalpha():
+                word_freq[clean_word] = word_freq.get(clean_word, 0) + 1
+        keywords = sorted(word_freq.keys(), key=lambda x: word_freq[x], reverse=True)[:5]
+
+        slides = [
+            {
+                "title": effective_topic or "Document Overview",
+                "bullets": [
+                    f"Main Topic: {keywords[0].title() if keywords else 'General'}: Summarizes document focus.",
+                    f"Word Count: {word_count}: Indicates content depth.",
+                    f"Excerpt: {sentences[0][:50]}...: Key starting point." if sentences else "No content: Empty document."
+                ],
+                "visual": "Document icon"
+            }
+        ]
+
+        bullets_per_slide = 3
+        for i in range(1, max_slides):
+            start = i * bullets_per_slide
+            slide_bullets = sentences[start:start + bullets_per_slide]
+            if not slide_bullets:
+                break
+
+            relevant_bullets = [
+                f"{s[:30]}...: {s[:50]}." for s in slide_bullets
+                if any(k.lower() in s.lower() for k in keywords)
+            ] or [f"{s[:30]}...: {s[:50]}." for s in slide_bullets]
+
+            slides.append({
+                "title": f"Section {i}: {keywords[i % len(keywords)].title() if keywords else 'Content'}",
+                "bullets": relevant_bullets[:bullets_per_slide],
+                "visual": "Text summary"
+            })
+
+        logger.info(f"Generated {len(slides)} fallback slides")
         return slides
-
-    def _create_styled_ppt(self, title: str, slides_data):
-        prs = Presentation()
-        for slide_info in slides_data:
-            slide = prs.slides.add_slide(prs.slide_layouts[1])
-            slide.shapes.title.text = slide_info["title"]
-
-            content_shape = slide.placeholders[1]
-            content_shape.text = "\n".join(slide_info["content"])
-
-            # Style bullet points
-            for paragraph in content_shape.text_frame.paragraphs:
-                paragraph.font.size = Pt(14)
-                paragraph.font.color.rgb = RGBColor(50, 50, 50)
-
-        file_path = f"{title.replace(' ', '_')}.pptx"
-        prs.save(file_path)
-        return os.path.abspath(file_path)
-
 class FlashcardAgent:
   def __init__(self, client: GroqClient):
       self.client = client
