@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Network, Plus, Trash2, Edit3, Save, X, ZoomIn, ZoomOut, RotateCcw, Download, Upload } from 'lucide-react';
+import { Network, Plus, Trash2, Edit3, Save, X, ZoomIn, ZoomOut, RotateCcw, Download, Move, Link } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../contexts/AppContext';
 import type { ConceptMap, ConceptNode, ConceptConnection } from '../types';
@@ -361,70 +361,70 @@ export function MindMapTab() {
         <div className="flex items-center space-x-2">
           <motion.button
             onClick={() => setIsAddingNode(!isAddingNode)}
-            className={`p-2 rounded-lg transition-colors ${
+            className={`p-3 rounded-lg transition-colors ${
               isAddingNode 
-                ? 'bg-green-500 text-white' 
+                ? 'bg-green-500 text-white shadow-lg' 
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
             }`}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Add Node"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-5 h-5" />
           </motion.button>
 
           <motion.button
             onClick={() => setIsConnecting(!isConnecting)}
-            className={`p-2 rounded-lg transition-colors ${
+            className={`p-3 rounded-lg transition-colors ${
               isConnecting 
-                ? 'bg-blue-500 text-white' 
+                ? 'bg-blue-500 text-white shadow-lg' 
                 : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
             }`}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Connect Nodes"
           >
-            <Network className="w-4 h-4" />
+            <Link className="w-5 h-5" />
           </motion.button>
 
           <motion.button
             onClick={() => handleZoom(0.1)}
-            className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Zoom In"
           >
-            <ZoomIn className="w-4 h-4" />
+            <ZoomIn className="w-5 h-5" />
           </motion.button>
 
           <motion.button
             onClick={() => handleZoom(-0.1)}
-            className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Zoom Out"
           >
-            <ZoomOut className="w-4 h-4" />
+            <ZoomOut className="w-5 h-5" />
           </motion.button>
 
           <motion.button
             onClick={resetView}
-            className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Reset View"
           >
-            <RotateCcw className="w-4 h-4" />
+            <RotateCcw className="w-5 h-5" />
           </motion.button>
 
           <motion.button
             onClick={exportMindMap}
-            className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            className="p-3 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             title="Export"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-5 h-5" />
           </motion.button>
         </div>
       </div>
@@ -438,10 +438,14 @@ export function MindMapTab() {
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
           >
-            <p className="text-blue-800 dark:text-blue-200 text-sm">
-              {isAddingNode && 'Click anywhere on the canvas to add a new node.'}
-              {isConnecting && 'Click on two nodes to create a connection between them.'}
-            </p>
+            <div className="flex items-center space-x-2">
+              {isAddingNode && <Plus className="w-5 h-5 text-blue-600 dark:text-blue-400" />}
+              {isConnecting && <Link className="w-5 h-5 text-blue-600 dark:text-blue-400" />}
+              <p className="text-blue-800 dark:text-blue-200 text-sm font-medium">
+                {isAddingNode && 'Click anywhere on the canvas to add a new node.'}
+                {isConnecting && 'Click on two nodes to create a connection between them.'}
+              </p>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -452,7 +456,11 @@ export function MindMapTab() {
           ref={svgRef}
           className="w-full h-[600px] cursor-grab active:cursor-grabbing"
           onClick={handleSvgClick}
-          style={{ background: 'linear-gradient(45deg, #f8fafc 25%, transparent 25%), linear-gradient(-45deg, #f8fafc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f8fafc 75%), linear-gradient(-45deg, transparent 75%, #f8fafc 75%)', backgroundSize: '20px 20px', backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px' }}
+          style={{ 
+            background: 'linear-gradient(45deg, #f8fafc 25%, transparent 25%), linear-gradient(-45deg, #f8fafc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f8fafc 75%), linear-gradient(-45deg, transparent 75%, #f8fafc 75%)', 
+            backgroundSize: '20px 20px', 
+            backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px' 
+          }}
         >
           <g transform={`translate(${viewState.pan.x}, ${viewState.pan.y}) scale(${viewState.zoom})`}>
             {/* Connections */}
@@ -488,7 +496,7 @@ export function MindMapTab() {
                       x={midX}
                       y={midY}
                       textAnchor="middle"
-                      className="fill-gray-600 text-xs font-medium pointer-events-none"
+                      className="fill-gray-600 dark:fill-gray-300 text-xs font-medium pointer-events-none"
                       dy="-5"
                     >
                       {connection.label}
@@ -613,10 +621,10 @@ export function MindMapTab() {
                       <button
                         key={color}
                         onClick={() => updateNode(selectedNode, { color })}
-                        className={`w-8 h-8 rounded-full border-2 ${
+                        className={`w-8 h-8 rounded-full border-2 transition-all ${
                           getNodeById(selectedNode)?.color === color 
-                            ? 'border-gray-900 dark:border-white' 
-                            : 'border-gray-300'
+                            ? 'border-gray-900 dark:border-white scale-110' 
+                            : 'border-gray-300 hover:scale-105'
                         }`}
                         style={{ backgroundColor: color }}
                       />
@@ -626,7 +634,7 @@ export function MindMapTab() {
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Size
+                    Size: {getNodeById(selectedNode)?.size || 40}
                   </label>
                   <input
                     type="range"
@@ -634,7 +642,7 @@ export function MindMapTab() {
                     max="80"
                     value={getNodeById(selectedNode)?.size || 40}
                     onChange={(e) => updateNode(selectedNode, { size: parseInt(e.target.value) })}
-                    className="w-full"
+                    className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
                   />
                 </div>
                 
@@ -757,16 +765,17 @@ export function MindMapTab() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.5 }}
       >
-        <h3 className="font-semibold text-gray-900 dark:text-white mb-3">
-          How to Use
+        <h3 className="font-semibold text-gray-900 dark:text-white mb-3 flex items-center space-x-2">
+          <Move className="w-5 h-5" />
+          <span>How to Use the Mind Map</span>
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600 dark:text-gray-300">
-          <div>
+          <div className="space-y-2">
             <p>• <strong>Drag nodes:</strong> Click and drag to move nodes around</p>
             <p>• <strong>Add nodes:</strong> Click the + button, then click on canvas</p>
             <p>• <strong>Connect nodes:</strong> Click connect button, then click two nodes</p>
           </div>
-          <div>
+          <div className="space-y-2">
             <p>• <strong>Edit nodes:</strong> Select a node and click Edit</p>
             <p>• <strong>Delete:</strong> Select node/connection and delete</p>
             <p>• <strong>Zoom:</strong> Use zoom controls to navigate</p>
